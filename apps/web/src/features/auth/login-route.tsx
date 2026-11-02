@@ -70,7 +70,8 @@ export function validateLoginInput(formData: FormData):
   | { input?: never; errors: LoginFieldErrors; email: string } {
   const emailValue = formData.get("email");
   const passwordValue = formData.get("password");
-  const typed = typeof emailValue === "string" ? emailValue.trim() : "";
+  const rawTyped = typeof emailValue === "string" ? emailValue.trim() : "";
+  const typed = rawTyped.includes("@") ? rawTyped.replace(/\s+/g, "") : rawTyped;
   const email = signInEmail(typed);
   const password = typeof passwordValue === "string" ? passwordValue : "";
   const errors: LoginFieldErrors = {};
@@ -478,6 +479,81 @@ export function LoginRoute() {
               )}
             </button>
           </Form>
+
+          {/* Quick Demo & Provisioned Credentials Helper */}
+          <div className="mt-6 pt-5 border-t border-slate-200">
+            <div className="flex items-center justify-between mb-2.5">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                Quick Sign-In Credentials
+              </span>
+              <span className="text-[11px] font-semibold text-blue-600">Click to fill</span>
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-left">
+              <button
+                type="button"
+                onClick={() => {
+                  setEmail("ghanshamrn.a27@gmail.com");
+                  setPassword("Ghansham@123");
+                }}
+                className="p-2.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-blue-50/70 hover:border-blue-300 text-left transition-colors cursor-pointer"
+              >
+                <div className="text-[11px] font-bold text-slate-900 flex items-center justify-between">
+                  <span>Platform Operator</span>
+                  <span className="text-[9px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-mono">Operator</span>
+                </div>
+                <div className="text-[11px] text-slate-500 truncate mt-0.5">ghanshamrn.a27@gmail.com</div>
+                <div className="text-[10px] text-slate-400 font-mono mt-0.5">Pwd: Ghansham@123</div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setEmail("owner@kestrion.demo");
+                  setPassword("Password@123");
+                }}
+                className="p-2.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-emerald-50/70 hover:border-emerald-300 text-left transition-colors cursor-pointer"
+              >
+                <div className="text-[11px] font-bold text-slate-900 flex items-center justify-between">
+                  <span>Healthcare Org Admin</span>
+                  <span className="text-[9px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded font-mono">Admin</span>
+                </div>
+                <div className="text-[11px] text-slate-500 truncate mt-0.5">owner@kestrion.demo</div>
+                <div className="text-[10px] text-slate-400 font-mono mt-0.5">Pwd: Password@123</div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setEmail("beingsocial@gmail.com");
+                  setPassword("ghansham@123");
+                }}
+                className="p-2.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-indigo-50/70 hover:border-indigo-300 text-left transition-colors cursor-pointer"
+              >
+                <div className="text-[11px] font-bold text-slate-900 flex items-center justify-between">
+                  <span>Corporate Org Admin</span>
+                  <span className="text-[9px] bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded font-mono">Admin</span>
+                </div>
+                <div className="text-[11px] text-slate-500 truncate mt-0.5">beingsocial@gmail.com</div>
+                <div className="text-[10px] text-slate-400 font-mono mt-0.5">Pwd: ghansham@123</div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setEmail("pooja.s@beingsocial.demo");
+                  setPassword("sham@123");
+                }}
+                className="p-2.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-purple-50/70 hover:border-purple-300 text-left transition-colors cursor-pointer"
+              >
+                <div className="text-[11px] font-bold text-slate-900 flex items-center justify-between">
+                  <span>Staff / Clinical Lead</span>
+                  <span className="text-[9px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded font-mono">Member</span>
+                </div>
+                <div className="text-[11px] text-slate-500 truncate mt-0.5">pooja.s@beingsocial.demo</div>
+                <div className="text-[10px] text-slate-400 font-mono mt-0.5">Pwd: sham@123</div>
+              </button>
+            </div>
+          </div>
 
           {/* Workspace info & governance footer */}
           <div className="mt-8 pt-6 border-t border-slate-100 space-y-3">

@@ -80,6 +80,33 @@ export async function registerIdentityRoutes(app: FastifyInstance, options: Saas
         },
         as,
       );
+      if (options.mailer) {
+        for (const person of prepared.people) {
+          if (person.temporaryPassword) {
+            try {
+              await options.mailer.send(
+                person.email,
+                `Your Command Center Login Credentials`,
+                [
+                  `Hello,`,
+                  ``,
+                  `An administrator has provisioned your account on Command Center.`,
+                  ``,
+                  `Your Sign-In Credentials:`,
+                  `• Work Email: ${person.email}`,
+                  `• Temporary Password: ${person.temporaryPassword}`,
+                  ``,
+                  `Please sign in at your workspace login page and update your password.`,
+                  ``,
+                  `Command Center Security`,
+                ].join("\n"),
+              );
+            } catch (mailErr) {
+              console.error("Failed to deliver temporary credentials email:", mailErr);
+            }
+          }
+        }
+      }
       return InviteMembersResponseSchema.parse({ mode: "logins", members: prepared.people });
     } catch (error) {
       await prepared.undo();

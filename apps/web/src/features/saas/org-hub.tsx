@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { z } from "zod";
 import {
   InviteMembersResponseSchema,
   RequestRoleOtpResponseSchema,
@@ -514,6 +515,12 @@ function Roles({
           onChange={setEditing}
           onClose={() => setEditing(undefined)}
           tenant={tenant}
+          onRoleCreated={async (roleId, _name, issued) => {
+            if (issued) {
+              setIssuedForRole({ roleId, set: issued });
+            }
+            await reload();
+          }}
         />
       )}
 
@@ -1026,7 +1033,22 @@ function Roles({
                 )}
               </div>
 
-              {isOpen && editing && <RoleEditor w={w} change={change} value={editing} onChange={setEditing} onClose={() => setEditing(undefined)} tenant={tenant} />}
+              {isOpen && editing && (
+                <RoleEditor
+                  w={w}
+                  change={change}
+                  value={editing}
+                  onChange={setEditing}
+                  onClose={() => setEditing(undefined)}
+                  tenant={tenant}
+                  onRoleCreated={async (roleId, _name, issued) => {
+                    if (issued) {
+                      setIssuedForRole({ roleId, set: issued });
+                    }
+                    await reload();
+                  }}
+                />
+              )}
             </section>
           );
         })}
@@ -1038,11 +1060,12 @@ function Roles({
 
 function RoleEditor({
   w,
-  change,
+  change: _change,
   value,
   onChange,
   onClose,
   tenant,
+  onRoleCreated,
 }: {
   w: SaasWorkspace;
   change: Change;
@@ -1050,6 +1073,7 @@ function RoleEditor({
   onChange: (v: Editing) => void;
   onClose: () => void;
   tenant: string;
+  onRoleCreated?: (roleId: string, roleName: string, issued?: IssuedSet) => void;
 }) {
   const [search, setSearch] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1064,6 +1088,14 @@ function RoleEditor({
   const [secondsLeft, setSecondsLeft] = useState(600);
   const [cooldown, setCooldown] = useState(0);
   const [successMessage, setSuccessMessage] = useState("");
+
+  // Optional team member provisioning with temporary credentials when creating a role
+  const [provisionPerson, setProvisionPerson] = useState(true);
+  const [personName, setPersonName] = useState("");
+  const [personEmail, setPersonEmail] = useState("");
+  const [personPassword, setPersonPassword] = useState(() => makeRandomPassword());
+  const [showPersonPassword, setShowPersonPassword] = useState(false);
+  const [personError, setPersonError] = useState("");
 
   const active = useMemo(() => w.kpis.filter((k) => k.state === "active"), [w.kpis]);
   const groups = useMemo(() => {
@@ -1115,6 +1147,9 @@ function RoleEditor({
       setOtpSentTo(res.sentTo);
       setSecondsLeft(res.expiresInMinutes * 60);
       setCooldown(30);
+      if (res.debugCode) {
+        setOtpCode(res.debugCode);
+      }
       return true;
     } catch (err) {
       setOtpError(err instanceof Error ? err.message : "Unable to generate verification code.");
@@ -1126,6 +1161,10 @@ function RoleEditor({
 
   async function handleStartSave() {
     if (problem) return;
+    if (!value.roleId && provisionPerson && !personEmail.trim()) {
+      setPersonError("Please enter the employee work email, or uncheck 'Assign Now'.");
+      return;
+    }
     // When creating a new role (or saving as owner), prompt for OTP verification!
     setOtpModalOpen(true);
     setOtpCode("");
@@ -1142,23 +1181,51 @@ function RoleEditor({
     setOtpVerifying(true);
     setOtpError("");
     try {
-      const ok = await change("/roles/save", {
-        ...(value.roleId ? { roleId: value.roleId } : {}),
-        name: value.name.trim(),
-        capabilities: value.capabilities,
-        scopeUnitId: usesScope ? value.scopeUnitId : null,
-        kpiIds: usesKpis && !value.allKpis ? value.kpiIds : [],
-        otpCode: otpCode.trim(),
-      });
-      if (ok) {
-        setSuccessMessage(`✓ Role "${value.name.trim()}" authorized and created successfully!`);
-        setTimeout(() => {
-          setOtpModalOpen(false);
-          onClose();
-        }, 900);
-      } else {
-        setOtpError("Verification code was rejected. Please check the code and try again.");
+      const saveRes = await request(
+        `/api/saas/${tenant}/roles/save`,
+        z.object({ id: z.string() }),
+        {
+          ...(value.roleId ? { roleId: value.roleId } : {}),
+          name: value.name.trim(),
+          capabilities: value.capabilities,
+          scopeUnitId: usesScope ? value.scopeUnitId : null,
+          kpiIds: usesKpis && !value.allKpis ? value.kpiIds : [],
+          otpCode: otpCode.trim(),
+        }
+      );
+      const roleId = saveRes.id;
+      let issuedSet: IssuedSet | undefined;
+
+      if (!value.roleId && provisionPerson && personEmail.trim()) {
+        try {
+          const peopleResult = await request(
+            `/api/identity/organizations/${tenant}/people`,
+            InviteMembersResponseSchema,
+            {
+              members: [{
+                displayName: personName.trim() || personEmail.trim().split('@')[0],
+                email: personEmail.trim(),
+                roleIds: [roleId],
+                password: personPassword.trim() || undefined,
+              }],
+            }
+          );
+          issuedSet = {
+            title: `Credentials created for ${value.name.trim()}`,
+            mode: peopleResult.mode,
+            people: peopleResult.members,
+          };
+        } catch (e) {
+          console.error("Failed to provision initial employee credentials:", e);
+        }
       }
+
+      setSuccessMessage(`✓ Role "${value.name.trim()}" authorized and created successfully!`);
+      setTimeout(() => {
+        setOtpModalOpen(false);
+        onRoleCreated?.(roleId, value.name.trim(), issuedSet);
+        onClose();
+      }, 700);
     } catch (err) {
       setOtpError(err instanceof Error ? err.message : "Failed to verify OTP.");
     } finally {
@@ -1168,15 +1235,52 @@ function RoleEditor({
 
   async function directSaveWithoutOtp() {
     setBusy(true);
-    const ok = await change("/roles/save", {
-      ...(value.roleId ? { roleId: value.roleId } : {}),
-      name: value.name.trim(),
-      capabilities: value.capabilities,
-      scopeUnitId: usesScope ? value.scopeUnitId : null,
-      kpiIds: usesKpis && !value.allKpis ? value.kpiIds : [],
-    });
-    setBusy(false);
-    if (ok) onClose();
+    try {
+      const saveRes = await request(
+        `/api/saas/${tenant}/roles/save`,
+        z.object({ id: z.string() }),
+        {
+          ...(value.roleId ? { roleId: value.roleId } : {}),
+          name: value.name.trim(),
+          capabilities: value.capabilities,
+          scopeUnitId: usesScope ? value.scopeUnitId : null,
+          kpiIds: usesKpis && !value.allKpis ? value.kpiIds : [],
+        }
+      );
+      const roleId = saveRes.id;
+      let issuedSet: IssuedSet | undefined;
+
+      if (!value.roleId && provisionPerson && personEmail.trim()) {
+        try {
+          const peopleResult = await request(
+            `/api/identity/organizations/${tenant}/people`,
+            InviteMembersResponseSchema,
+            {
+              members: [{
+                displayName: personName.trim() || personEmail.trim().split('@')[0],
+                email: personEmail.trim(),
+                roleIds: [roleId],
+                password: personPassword.trim() || undefined,
+              }],
+            }
+          );
+          issuedSet = {
+            title: `Credentials created for ${value.name.trim()}`,
+            mode: peopleResult.mode,
+            people: peopleResult.members,
+          };
+        } catch (e) {
+          console.error("Failed to provision initial employee credentials:", e);
+        }
+      }
+
+      onRoleCreated?.(roleId, value.name.trim(), issuedSet);
+      onClose();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to save role.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   const problem =
@@ -1280,6 +1384,113 @@ function RoleEditor({
             </>
           )}
         </fieldset>
+      )}
+
+      {/* When creating a new role: Option to provision team member with temporary credentials */}
+      {!value.roleId && (
+        <div style={{ marginTop: 22, padding: "18px 20px", borderRadius: 12, background: "#f8fafc", border: "1px solid #e2e8f0" }}>
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{ width: 34, height: 34, borderRadius: 8, background: "#dbeafe", color: "#1d4ed8", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                <UserPlus size={18} />
+              </div>
+              <div>
+                <h4 style={{ margin: 0, fontSize: 14.5, fontWeight: 800, color: "#0f172a" }}>
+                  Assign Team Member &amp; Issue Temporary Credentials
+                </h4>
+                <p style={{ margin: "2px 0 0", fontSize: 12, color: "#64748b" }}>
+                  Assign an employee to this role now and generate their initial sign-in credentials.
+                </p>
+              </div>
+            </div>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 12.5, fontWeight: 700, color: "#1d4ed8" }}>
+              <input
+                type="checkbox"
+                checked={provisionPerson}
+                onChange={(e) => setProvisionPerson(e.target.checked)}
+                style={{ width: 15, height: 15 }}
+              />
+              <span>Assign Now</span>
+            </label>
+          </div>
+
+          {provisionPerson && (
+            <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 12 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 12 }}>
+                <div>
+                  <label style={{ display: "block", fontSize: 11.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "#475569", marginBottom: 5 }}>
+                    Employee Full Name
+                  </label>
+                  <input
+                    type="text"
+                    value={personName}
+                    onChange={(e) => setPersonName(e.target.value)}
+                    placeholder="e.g. Dr. Priya Patel"
+                    maxLength={120}
+                    style={{ width: "100%", padding: "8px 11px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 13 }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: 11.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "#475569", marginBottom: 5 }}>
+                    Employee Work Email *
+                  </label>
+                  <input
+                    type="email"
+                    value={personEmail}
+                    onChange={(e) => {
+                      setPersonEmail(e.target.value);
+                      if (personError) setPersonError("");
+                    }}
+                    placeholder="e.g. priya.patel@hospital.demo"
+                    style={{ width: "100%", padding: "8px 11px", borderRadius: 8, border: personError ? "1px solid #ef4444" : "1px solid #cbd5e1", fontSize: 13 }}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 5 }}>
+                  <label style={{ fontSize: 11.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "#475569" }}>
+                    Temporary Password
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setPersonPassword(makeRandomPassword())}
+                    style={{ background: "none", border: "none", color: "#2563eb", fontSize: 11.5, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}
+                  >
+                    <RefreshCw size={11} />
+                    <span>Generate New</span>
+                  </button>
+                </div>
+                <div style={{ position: "relative" }}>
+                  <input
+                    type={showPersonPassword ? "text" : "password"}
+                    value={personPassword}
+                    onChange={(e) => setPersonPassword(e.target.value)}
+                    placeholder="Temporary password"
+                    style={{ width: "100%", padding: "8px 36px 8px 11px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 13, fontFamily: "monospace" }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPersonPassword(!showPersonPassword)}
+                    style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: "#64748b", cursor: "pointer" }}
+                  >
+                    {showPersonPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+                  </button>
+                </div>
+              </div>
+
+              {personError && (
+                <div style={{ fontSize: 12, color: "#dc2626", fontWeight: 600 }}>
+                  {personError}
+                </div>
+              )}
+
+              <div style={{ padding: "8px 12px", background: "#eff6ff", borderRadius: 8, border: "1px solid #bfdbfe", fontSize: 12, color: "#1e40af" }}>
+                ℹ️ When this role is authorized, this team member will be created with these temporary credentials. You will be able to copy the credentials to provide directly to them.
+              </div>
+            </div>
+          )}
+        </div>
       )}
 
       {problem && <p className="muted">{problem}</p>}
